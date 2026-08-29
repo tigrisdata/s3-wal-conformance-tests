@@ -40,11 +40,15 @@ authoritative.
 
 ## Status
 
-Early. The spec and harness design are drafted; the harness scaffold and two test
-groups are implemented: **C4 (conditional write / CAS)** and **C3 (listing, with
-adversarial pagination — churn scans and a deterministic cursor boundary attack)**.
-Remaining groups (C1/C2 linearizability, C5 delete durability, lemma workloads)
-follow the build order in the harness design doc.
+Early. The spec and harness design are drafted; all five clause groups are
+implemented: **C1** (porcupine-checked linearizability histories), **C2**
+(monotonic existence via GET+LIST observation), **C3** (listing, with adversarial
+pagination — churn scans and a deterministic cursor boundary attack), **C4**
+(conditional write / CAS with outcome-based verdicts), and **C5** (delete
+durability: delete-then-hammer, log-trim shape, and a cross-run manifest that
+re-verifies every previously deleted key on later runs, accumulating wall-clock
+gap evidence). Remaining: lemma workloads (LD.1/LD.2), fault modes, multi-vantage
+orchestration.
 
 ## Running
 

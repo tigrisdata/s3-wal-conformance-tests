@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tigrisdata/s3-wal-conformance-tests/internal/report"
 	"github.com/tigrisdata/s3-wal-conformance-tests/internal/store"
@@ -28,6 +29,7 @@ import (
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c2monotonic"
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c3listing"
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c4cas"
+	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c5delete"
 )
 
 type endpointList []string
@@ -39,7 +41,9 @@ func main() {
 	var endpoints endpointList
 	flag.Var(&endpoints, "endpoint", "S3 endpoint URL, optionally label=url; repeat for multiple vantages")
 	bucket := flag.String("bucket", "", "bucket to test (required; contents under the run prefix will be created and deleted)")
-	groups := flag.String("groups", "c1,c2,c3,c4", "comma-separated test groups (available: c1, c2, c3, c4)")
+	groups := flag.String("groups", "c1,c2,c3,c4,c5", "comma-separated test groups (available: c1, c2, c3, c4, c5)")
+	observe := flag.Duration("observe", 15*time.Second, "c5: observation window hammering deleted keys")
+	artifacts := flag.String("artifacts", "conformance-artifacts", "directory for failure artifacts and the c5 cross-run manifest")
 	region := flag.String("region", "auto", "region string for the SDK (S3-compatible endpoints usually accept any)")
 	seed := flag.Int64("seed", 0, "random seed; 0 derives one and prints it (every run is reproducible from its seed)")
 	contenders := flag.Int("contenders", 8, "concurrent contenders per race")
@@ -91,10 +95,11 @@ func main() {
 		switch strings.TrimSpace(g) {
 		case "c1":
 			rep.Groups = append(rep.Groups, c1linear.Run(ctx, &c1linear.Config{
-				Stores:  stores,
-				Prefix:  runPrefix + "c1/",
-				Rng:     rng,
-				Clients: *contenders,
+				Stores:       stores,
+				Prefix:       runPrefix + "c1/",
+				Rng:          rng,
+				Clients:      *contenders,
+				ArtifactsDir: *artifacts,
 			}))
 		case "c2":
 			rep.Groups = append(rep.Groups, c2monotonic.Run(ctx, &c2monotonic.Config{
@@ -116,9 +121,17 @@ func main() {
 				Rounds:     *rounds,
 				Rng:        rng,
 			}))
+		case "c5":
+			rep.Groups = append(rep.Groups, c5delete.Run(ctx, &c5delete.Config{
+				Stores:       stores,
+				Prefix:       runPrefix + "c5/",
+				Rng:          rng,
+				ArtifactsDir: *artifacts,
+				ObserveFor:   *observe,
+			}))
 		case "":
 		default:
-			fatal("unknown group %q (available: c1, c2, c3, c4)", g)
+			fatal("unknown group %q (available: c1, c2, c3, c4, c5)", g)
 		}
 	}
 
