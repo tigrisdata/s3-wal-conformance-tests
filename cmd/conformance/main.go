@@ -24,6 +24,7 @@ import (
 
 	"github.com/tigrisdata/s3-wal-conformance-tests/internal/report"
 	"github.com/tigrisdata/s3-wal-conformance-tests/internal/store"
+	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c3listing"
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c4cas"
 )
 
@@ -36,7 +37,7 @@ func main() {
 	var endpoints endpointList
 	flag.Var(&endpoints, "endpoint", "S3 endpoint URL, optionally label=url; repeat for multiple vantages")
 	bucket := flag.String("bucket", "", "bucket to test (required; contents under the run prefix will be created and deleted)")
-	groups := flag.String("groups", "c4", "comma-separated test groups (available: c4)")
+	groups := flag.String("groups", "c3,c4", "comma-separated test groups (available: c3, c4)")
 	region := flag.String("region", "auto", "region string for the SDK (S3-compatible endpoints usually accept any)")
 	seed := flag.Int64("seed", 0, "random seed; 0 derives one and prints it (every run is reproducible from its seed)")
 	contenders := flag.Int("contenders", 8, "concurrent contenders per race")
@@ -86,6 +87,12 @@ func main() {
 
 	for _, g := range strings.Split(*groups, ",") {
 		switch strings.TrimSpace(g) {
+		case "c3":
+			rep.Groups = append(rep.Groups, c3listing.Run(ctx, &c3listing.Config{
+				Stores: stores,
+				Prefix: runPrefix + "c3/",
+				Rng:    rng,
+			}))
 		case "c4":
 			rep.Groups = append(rep.Groups, c4cas.Run(ctx, &c4cas.Config{
 				Stores:     stores,
@@ -96,7 +103,7 @@ func main() {
 			}))
 		case "":
 		default:
-			fatal("unknown group %q (available: c4)", g)
+			fatal("unknown group %q (available: c3, c4)", g)
 		}
 	}
 

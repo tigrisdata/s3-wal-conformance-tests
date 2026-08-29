@@ -188,13 +188,16 @@ type ListPage struct {
 }
 
 // List fetches one page. Pass the previous page's NextToken to continue.
+// maxKeys <= 0 leaves the page size to the provider's default.
 func (s *Store) List(ctx context.Context, prefix, token string, maxKeys int32) (ListPage, Outcome) {
 	var page ListPage
 	err := s.op(ctx, "LIST", func(c context.Context) error {
 		in := &s3.ListObjectsV2Input{
-			Bucket:  aws.String(s.Bucket),
-			Prefix:  aws.String(prefix),
-			MaxKeys: aws.Int32(maxKeys),
+			Bucket: aws.String(s.Bucket),
+			Prefix: aws.String(prefix),
+		}
+		if maxKeys > 0 {
+			in.MaxKeys = aws.Int32(maxKeys)
 		}
 		if token != "" {
 			in.ContinuationToken = aws.String(token)

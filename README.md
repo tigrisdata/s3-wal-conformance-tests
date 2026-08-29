@@ -40,10 +40,11 @@ authoritative.
 
 ## Status
 
-Early. The spec and harness design are drafted; the harness scaffold and the **C4
-(conditional write / CAS) test group** are implemented. Remaining groups (C3 listing,
-C1/C2 linearizability, C5 delete durability, lemma workloads) follow the build order
-in the harness design doc.
+Early. The spec and harness design are drafted; the harness scaffold and two test
+groups are implemented: **C4 (conditional write / CAS)** and **C3 (listing, with
+adversarial pagination — churn scans and a deterministic cursor boundary attack)**.
+Remaining groups (C1/C2 linearizability, C5 delete durability, lemma workloads)
+follow the build order in the harness design doc.
 
 ## Running
 
