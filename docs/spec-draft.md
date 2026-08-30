@@ -11,11 +11,11 @@ durability and coordination to a commodity object store, eliminating any separat
 metadata database, provided the object store meets a small set of testable guarantees.
 This document specifies those guarantees as five clauses over the standard
 S3-style API (PUT, GET, LIST, DELETE, conditional PUT). It is derived from the
-storage semantics and lemmas of Vickers et al., *"The LogDrive: Composable Durability
-for Cloud-Based Shared Logs"* (OSDI '26), deliberately strengthened into clauses a
-provider can offer and a black-box suite can verify — the section *Relationship to
-the LogDrive paper* states exactly which parts are the paper's and which are this
-contract's. A companion open-source conformance suite tests
+formal specification (Appendix A) and lemmas of Vickers et al., *"The LogDrive:
+Composable Durability for Cloud-Based Shared Logs"* (OSDI '26), deliberately
+strengthened into clauses a provider can offer and a black-box suite can verify —
+the section *Relationship to the LogDrive paper* states exactly which parts are the
+paper's and which are this contract's. A companion open-source conformance suite tests
 each clause against any S3-compatible endpoint; the core of a conformance claim can be
 verified by any consumer independently, with backend fault coverage a
 provider-published extension (see Conformance).
@@ -146,15 +146,20 @@ A provider MAY offer stronger guarantees; the contract does not test for them.
 This contract is derived from the paper but is deliberately **stronger** than the
 paper's proven minimum. The differences are intentional:
 
-- **The paper's log entries need only write-once semantics.** LogDrive addresses are
-  single-value registers — linearizable for read/write only under the discipline
-  that a single value is ever written to each address (§3.1) — and the paper's
-  `weakTail` is explicitly *not* linearizable: it is only required to be equivalent
-  to a deterministic function over an unordered, non-atomic scan (Lemmas LD.1,
-  LD.2). C1 instead requires full per-key linearizability under arbitrary overwrites
-  and deletes: a provider cannot observe or enforce a client's write-once
-  discipline, so this contract requires the stronger property a black-box suite can
-  actually check, which implies the paper's requirement.
+- **The paper's log entries are write-once; C1 covers arbitrary overwrites.** The
+  paper's §A.1 specifies linearizable READ/WRITE — a total order of completed
+  operations consistent with real-time precedence — but under a *single-value
+  assumption*: if two writes propose different values to one address, behavior is
+  unspecified. Its `weakTail` is explicitly *not* linearizable — only equivalent to
+  a deterministic function over an unordered, non-atomic scan (Lemmas LD.1, LD.2).
+  A provider cannot observe or enforce a client's single-value discipline, so C1
+  requires linearizability under arbitrary overwrites and deletes — the stronger,
+  black-box-testable property, which implies §A.1's requirement on well-formed
+  executions.
+- **C2 generalizes §A.1's write-once monotonicity.** The paper states monotonicity
+  of written-ness as a first-class axiom: once written, an address is never
+  unwritten. C2 is its observation-side counterpart for stores with deletion — once
+  observed present, never observed absent unless deleted after that observation.
 - **The paper tolerated weaker listing than C3.** The authors' simulation testing
   surfaced a pagination-induced linearizability violation in their S3 LogDrive;
   their resolution was the insight that the AtomicLog layered above remains
@@ -168,7 +173,10 @@ paper's proven minimum. The differences are intentional:
 - **C4 matches the paper.** One conditionally-written register is the only source of
   consensus in the paper's system — the VirtualLog membership register (§5.1); log
   entries themselves need no conditional writes (the paper notes that S3 before
-  conditional-write support sufficed for entries).
+  conditional-write support sufficed for entries). The paper's production system
+  keeps that register in DynamoDB, a choice made when S3 lacked conditional writes;
+  conditional PUT is now standard across major providers, which is precisely what
+  makes this contract satisfiable on object storage alone.
 - The explicit non-requirements restate the paper's design premise: no append API,
   no transactions, no server-side sequencing, composition over commodity
   put/get/list (§1, §3).
