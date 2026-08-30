@@ -11,8 +11,11 @@ durability and coordination to a commodity object store, eliminating any separat
 metadata database, provided the object store meets a small set of testable guarantees.
 This document specifies those guarantees as five clauses over the standard
 S3-style API (PUT, GET, LIST, DELETE, conditional PUT). It is derived from the
-specification and proofs in Vickers et al., *"The LogDrive: Composable Durability for
-Cloud-Based Shared Logs"* (OSDI '26). A companion open-source conformance suite tests
+storage semantics and lemmas of Vickers et al., *"The LogDrive: Composable Durability
+for Cloud-Based Shared Logs"* (OSDI '26), deliberately strengthened into clauses a
+provider can offer and a black-box suite can verify — the section *Relationship to
+the LogDrive paper* states exactly which parts are the paper's and which are this
+contract's. A companion open-source conformance suite tests
 each clause against any S3-compatible endpoint; the core of a conformance claim can be
 verified by any consumer independently, with backend fault coverage a
 provider-published extension (see Conformance).
@@ -82,9 +85,9 @@ deleted mid-listing MAY appear or not, according to whether the change lands ahe
 or behind the cursor position.
 
 *Why it's needed:* recovery and tail-finding scan the log by prefix. A skipped key reads
-as a hole in the log; the paper's authors found a real linearizability violation in a
-production implementation caused specifically by pagination behavior under concurrent
-writes. Conformance testing of this clause MUST be adversarial (writes landing mid-scan,
+as a hole in the log; the paper's authors' own simulation testing surfaced a
+pagination-induced linearizability violation in their S3 implementation (§4.1) that
+their API-level tests had not caught. Conformance testing of this clause MUST be adversarial (writes landing mid-scan,
 at page boundaries, at page-size multiples), not assertion-by-specification.
 
 ### C4 — Conditional write (compare-and-swap)
@@ -137,6 +140,43 @@ everything above is available today on commodity object storage:
 - Bounded staleness or clock guarantees
 
 A provider MAY offer stronger guarantees; the contract does not test for them.
+
+## Relationship to the LogDrive paper
+
+This contract is derived from the paper but is deliberately **stronger** than the
+paper's proven minimum. The differences are intentional:
+
+- **The paper's log entries need only write-once semantics.** LogDrive addresses are
+  single-value registers — linearizable for read/write only under the discipline
+  that a single value is ever written to each address (§3.1) — and the paper's
+  `weakTail` is explicitly *not* linearizable: it is only required to be equivalent
+  to a deterministic function over an unordered, non-atomic scan (Lemmas LD.1,
+  LD.2). C1 instead requires full per-key linearizability under arbitrary overwrites
+  and deletes: a provider cannot observe or enforce a client's write-once
+  discipline, so this contract requires the stronger property a black-box suite can
+  actually check, which implies the paper's requirement.
+- **The paper tolerated weaker listing than C3.** The authors' simulation testing
+  surfaced a pagination-induced linearizability violation in their S3 LogDrive;
+  their resolution was the insight that the AtomicLog layered above remains
+  linearizable even when `weakTail` is not (§4.1). A provider contract cannot assume
+  every consumer builds that exact layer on top, so C3 requires strongly consistent,
+  ordered, monotone-cursor listing outright.
+- **C5 formalizes what the paper leaves implicit.** The Loglet API includes
+  `prefixTrim` (§4, Fig. 5) and the paper's systems checkpoint and trim aggressively
+  (§5.1), but the paper states no delete-durability requirement. C5 is this
+  contract's formalization of what safe trimming assumes.
+- **C4 matches the paper.** One conditionally-written register is the only source of
+  consensus in the paper's system — the VirtualLog membership register (§5.1); log
+  entries themselves need no conditional writes (the paper notes that S3 before
+  conditional-write support sufficed for entries).
+- The explicit non-requirements restate the paper's design premise: no append API,
+  no transactions, no server-side sequencing, composition over commodity
+  put/get/list (§1, §3).
+
+The implication runs one way: a store satisfying C1–C5 supports the paper's
+constructions — LogDrive, AtomicLog, VirtualLog — with margin. The converse is not
+claimed; the paper's minimum is genuinely weaker, and a store could host a LogDrive
+while failing this contract.
 
 ## Conformance
 

@@ -7,9 +7,14 @@ external metadata database.
 
 The contract and the tests are derived from Vickers et al.,
 [*"The LogDrive: Composable Durability for Cloud-Based Shared Logs"*](https://www.usenix.org/conference/osdi26/presentation/vickers)
-(OSDI '26). The paper proves that these guarantees are *sufficient*; this repository
-turns its specification (Appendix A) and lemmas (LD.1, LD.2) into a contract other
-providers can implement and a test suite anyone can run.
+(OSDI '26). The paper proves that a small set of storage properties is *sufficient*
+to host consensus; this repository turns its storage semantics (§3) and lemmas
+(LD.1, LD.2) into a contract other providers can implement and a test suite anyone
+can run. The contract is deliberately **stronger** than the paper's proven minimum —
+a provider can't verify a client's write-once discipline, so the contract requires
+properties a black-box suite can actually test, which imply the paper's. The spec's
+*Relationship to the LogDrive paper* section states precisely what is the paper's
+and what is this project's.
 
 The suite runs against **any S3-compatible endpoint** given only an endpoint URL,
 credentials, and a bucket. Output is a pass/fail report per contract clause plus
