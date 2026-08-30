@@ -30,6 +30,7 @@ import (
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c3listing"
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c4cas"
 	"github.com/tigrisdata/s3-wal-conformance-tests/tests/c5delete"
+	"github.com/tigrisdata/s3-wal-conformance-tests/tests/lemmas"
 )
 
 type endpointList []string
@@ -41,7 +42,8 @@ func main() {
 	var endpoints endpointList
 	flag.Var(&endpoints, "endpoint", "S3 endpoint URL, optionally label=url; repeat for multiple vantages")
 	bucket := flag.String("bucket", "", "bucket to test (required; contents under the run prefix will be created and deleted)")
-	groups := flag.String("groups", "c1,c2,c3,c4,c5", "comma-separated test groups (available: c1, c2, c3, c4, c5)")
+	groups := flag.String("groups", "c1,c2,c3,c4,c5,lemmas", "comma-separated test groups (available: c1, c2, c3, c4, c5, lemmas)")
+	payload := flag.Int("payload", 5120, "lemmas: object size in bytes for the log workload (paper nominal ~5KB)")
 	observe := flag.Duration("observe", 15*time.Second, "c5: observation window hammering deleted keys")
 	artifacts := flag.String("artifacts", "conformance-artifacts", "directory for failure artifacts and the c5 cross-run manifest")
 	region := flag.String("region", "auto", "region string for the SDK (S3-compatible endpoints usually accept any)")
@@ -129,9 +131,17 @@ func main() {
 				ArtifactsDir: *artifacts,
 				ObserveFor:   *observe,
 			}))
+		case "lemmas":
+			rep.Groups = append(rep.Groups, lemmas.Run(ctx, &lemmas.Config{
+				Stores:       stores,
+				Prefix:       runPrefix + "lemmas/",
+				Rng:          rng,
+				Writers:      *contenders,
+				PayloadBytes: *payload,
+			}))
 		case "":
 		default:
-			fatal("unknown group %q (available: c1, c2, c3, c4, c5)", g)
+			fatal("unknown group %q (available: c1, c2, c3, c4, c5, lemmas)", g)
 		}
 	}
 

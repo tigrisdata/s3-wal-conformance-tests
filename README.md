@@ -52,8 +52,11 @@ pagination — churn scans and a deterministic cursor boundary attack), **C4**
 (conditional write / CAS with outcome-based verdicts), and **C5** (delete
 durability: delete-then-hammer, log-trim shape, and a cross-run manifest that
 re-verifies every previously deleted key on later runs, accumulating wall-clock
-gap evidence). Remaining: lemma workloads (LD.1/LD.2), fault modes, multi-vantage
-orchestration.
+gap evidence). The **lemma workload** is also implemented: the paper's S3 LogDrive
+construction (reverse-encoded addresses, K-window write discipline, `weakTail` via
+LIST + window scan) with LD.1 checked against sound client-side tail bounds and
+LD.2 cross-checked against full scans, at a configurable object size (`-payload`).
+Remaining: fault modes, multi-vantage orchestration.
 
 ## Running
 
