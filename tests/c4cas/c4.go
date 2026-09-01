@@ -158,9 +158,21 @@ func contendedCreate(ctx context.Context, cfg *Config) report.CheckResult {
 	return pass(name, "%d rounds × %d contenders: exactly one create wins", cfg.Rounds, cfg.Contenders)
 }
 
-// judgeContention applies the shared outcome-based verdict. initial is nil for
-// create races (the key did not exist). Returns nil if the round conforms.
+// judgeContention reads back the key's final state and applies the pure
+// outcome-based verdict. Returns nil if the round conforms.
 func judgeContention(ctx context.Context, cfg *Config, name, key string, initial []byte, bodies [][]byte, results []contenderResult, initialAllowed bool) *report.CheckResult {
+	final, _, out := cfg.store(0).Get(ctx, key)
+	if out != store.OK {
+		f := fail(name, "read-back failed: %s", out)
+		return &f
+	}
+	return judgeOutcomes(name, initial, bodies, results, final, initialAllowed)
+}
+
+// judgeOutcomes is the pure verdict over one contention round: contender
+// outcomes plus the read-back final state. initial is nil for create races
+// (the key did not exist beforehand).
+func judgeOutcomes(name string, initial []byte, bodies [][]byte, results []contenderResult, final []byte, initialAllowed bool) *report.CheckResult {
 	wins, ambiguous := 0, 0
 	winner := -1
 	for i, r := range results {
@@ -179,11 +191,6 @@ func judgeContention(ctx context.Context, cfg *Config, name, key string, initial
 	}
 	if wins > 1 {
 		f := fail(name, "%d contenders acknowledged as winners for one predicate state — CAS admitted multiple writes", wins)
-		return &f
-	}
-	final, _, out := cfg.store(0).Get(ctx, key)
-	if out != store.OK {
-		f := fail(name, "read-back failed: %s", out)
 		return &f
 	}
 	matchIdx := -1
