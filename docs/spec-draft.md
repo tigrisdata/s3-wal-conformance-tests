@@ -1,7 +1,9 @@
 # The Object-Store Contract for Shared-Log Workloads
 
-**Version:** 0.1-draft
-**Status:** Draft for review. Not yet published.
+**Version:** 0.1 (draft)
+**Status:** Published draft, open for review. The clause set (C1–C5) is stable;
+wording, conformance-level details, and test derivations may change before 1.0.
+Feedback via issues on this repository.
 
 ## Abstract
 
