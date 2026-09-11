@@ -45,25 +45,37 @@ const (
 type Store struct {
 	Vantage string // label recorded with every operation (e.g. region or endpoint host)
 	Bucket  string
+	Proxy   string // proxy URL this vantage routes through, if any
 
-	client  *s3.Client
-	rec     *Recorder
-	timeout time.Duration
+	client       *s3.Client
+	rec          *Recorder
+	timeout      time.Duration
+	regionHeader string
+	regions      regionTally
 }
 
 // Options configures a Store.
 type Options struct {
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Vantage   string
-	PathStyle bool
-	Timeout   time.Duration // per-operation timeout; 0 means 30s
+	Endpoint     string
+	Region       string
+	Bucket       string
+	Vantage      string
+	PathStyle    bool
+	Timeout      time.Duration // per-operation timeout; 0 means 30s
+	ProxyURL     string        // route this vantage through a proxy (socks5://, http://, https://)
+	RegionHeader string        // response header naming the serving region; "" disables capture
 }
 
 // New builds a Store using the standard AWS credential chain.
 func New(ctx context.Context, opts Options, rec *Recorder) (*Store, error) {
-	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(opts.Region))
+	httpClient, err := buildHTTPClient(opts.ProxyURL, opts.RegionHeader)
+	if err != nil {
+		return nil, err
+	}
+	awsCfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(opts.Region),
+		config.WithHTTPClient(httpClient),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -78,20 +90,38 @@ func New(ctx context.Context, opts Options, rec *Recorder) (*Store, error) {
 		opts.Timeout = 30 * time.Second
 	}
 	return &Store{
-		Vantage: opts.Vantage,
-		Bucket:  opts.Bucket,
-		client:  client,
-		rec:     rec,
-		timeout: opts.Timeout,
+		Vantage:      opts.Vantage,
+		Bucket:       opts.Bucket,
+		Proxy:        opts.ProxyURL,
+		client:       client,
+		rec:          rec,
+		timeout:      opts.Timeout,
+		regionHeader: opts.RegionHeader,
 	}, nil
+}
+
+// RegionsObserved returns serving-region counts seen at this vantage.
+func (s *Store) RegionsObserved() map[string]int64 {
+	return s.regions.snapshot()
 }
 
 func (s *Store) op(ctx context.Context, name string, fn func(context.Context) error) error {
 	opCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	var rc *RegionCapture
+	if s.regionHeader != "" {
+		// An outer capture (e.g. from a test group annotating its history)
+		// takes precedence; otherwise attach our own for the tally.
+		if rc = captureFrom(opCtx); rc == nil {
+			opCtx, rc = ContextWithRegionCapture(opCtx)
+		}
+	}
 	start := time.Now()
 	err := fn(opCtx)
 	s.rec.Observe(name, time.Since(start))
+	if rc != nil {
+		s.regions.add(rc.Value())
+	}
 	return err
 }
 

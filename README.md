@@ -56,7 +56,10 @@ gap evidence). The **lemma workload** is also implemented: the paper's S3 LogDri
 construction (reverse-encoded addresses, K-window write discipline, `weakTail` via
 LIST + window scan) with LD.1 checked against sound client-side tail bounds and
 LD.2 cross-checked against full scans, at a configurable object size (`-payload`).
-Remaining: fault modes, multi-vantage orchestration.
+**Multi-vantage orchestration** with serving-region capture is implemented: runs
+spread clients across vantages, record which region served each request, and only
+claim cross-region evidence when the observed regions actually differ. Remaining:
+fault modes.
 
 ## Running
 
@@ -68,8 +71,44 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
 
 The suite creates and deletes objects under a `s3-wal-conformance/<seed>/` prefix in
 the given bucket. Every run prints its seed and is reproducible from it. Add
-`-json report.json` for the machine-readable report; repeat `-endpoint label=url`
-for multi-vantage runs (a single-vantage report is stamped `REGIONAL EVIDENCE ONLY`).
+`-json report.json` for the machine-readable report.
+
+### Multi-vantage runs
+
+The contract's clauses are global claims, so a run from one vantage is stamped
+`REGIONAL EVIDENCE ONLY`. To gather cross-region evidence, give the suite several
+vantages and route each through a host in a different region — an `ssh -N -D`
+SOCKS tunnel is the simplest way — so the connections genuinely originate there:
+
+```
+ssh -N -D 1081 user@host-in-iad &
+ssh -N -D 1082 user@host-in-fra &
+
+./conformance -bucket <test-bucket> \
+  -endpoint local=https://<s3-endpoint> \
+  -endpoint iad=https://<s3-endpoint>   -proxy iad=socks5://localhost:1081 \
+  -endpoint fra=https://<s3-endpoint>   -proxy fra=socks5://localhost:1082
+```
+
+Clients in every test group are spread across the vantages, so contended CAS
+races, listing churn, and the C2/C5 reader pools all cross regions.
+
+A second endpoint URL is not a second vantage unless it demonstrably routed
+elsewhere — many providers front every hostname with one anycast address. So the
+suite records the region that served each request (`-region-header`, default
+`X-Tigris-Served-From`; set it to whatever your provider returns, or empty to
+disable) and derives the evidence stamp from what it actually observed:
+
+| Observation | Stamp |
+|---|---|
+| one vantage | `REGIONAL EVIDENCE ONLY` |
+| several vantages, ≥2 distinct serving regions seen | `MULTI-VANTAGE (verified)` |
+| several vantages, all served from one region | `REGIONAL EVIDENCE ONLY (multiple endpoints, but every vantage was served from one region)` |
+| several vantages, no region header available | `MULTI-VANTAGE (unverified: no serving-region evidence)` |
+
+The per-vantage tallies appear at the top of every report (`served-from: iad×312
+sjc×4`) and in the JSON, and C1's failure artifacts annotate each operation with
+the region that served it.
 
 ## Neutrality
 

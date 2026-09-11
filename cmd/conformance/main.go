@@ -39,8 +39,10 @@ func (e *endpointList) String() string     { return strings.Join(*e, ",") }
 func (e *endpointList) Set(v string) error { *e = append(*e, v); return nil }
 
 func main() {
-	var endpoints endpointList
+	var endpoints, proxies endpointList
 	flag.Var(&endpoints, "endpoint", "S3 endpoint URL, optionally label=url; repeat for multiple vantages")
+	flag.Var(&proxies, "proxy", "route a vantage through a proxy, as label=proxy-url (socks5://, http://, https://); e.g. an `ssh -N -D` tunnel to a host in the target region")
+	regionHeader := flag.String("region-header", "X-Tigris-Served-From", "response header naming the region that served each request; recorded per vantage and used to verify multi-vantage evidence (empty disables)")
 	bucket := flag.String("bucket", "", "bucket to test (required; contents under the run prefix will be created and deleted)")
 	groups := flag.String("groups", "c1,c2,c3,c4,c5,lemmas", "comma-separated test groups (available: c1, c2, c3, c4, c5, lemmas)")
 	payload := flag.Int("payload", 5120, "lemmas: object size in bytes for the log workload (paper nominal ~5KB)")
@@ -70,26 +72,40 @@ func main() {
 	ctx := context.Background()
 	rec := store.NewRecorder()
 
+	proxyByLabel := map[string]string{}
+	for _, p := range proxies {
+		label, u, ok := strings.Cut(p, "=")
+		if !ok {
+			fatal("-proxy %q: want label=proxy-url", p)
+		}
+		proxyByLabel[label] = u
+	}
+
 	var stores []*store.Store
-	var urls, vantages []string
+	var vantages []report.VantageInfo
 	for i, e := range endpoints {
 		label, endpoint := splitEndpoint(e, i)
 		st, err := store.New(ctx, store.Options{
-			Endpoint:  endpoint,
-			Region:    *region,
-			Bucket:    *bucket,
-			Vantage:   label,
-			PathStyle: *pathStyle,
+			Endpoint:     endpoint,
+			Region:       *region,
+			Bucket:       *bucket,
+			Vantage:      label,
+			PathStyle:    *pathStyle,
+			ProxyURL:     proxyByLabel[label],
+			RegionHeader: *regionHeader,
 		}, rec)
 		if err != nil {
 			fatal("building client for %s: %v", endpoint, err)
 		}
+		delete(proxyByLabel, label)
 		stores = append(stores, st)
-		urls = append(urls, endpoint)
-		vantages = append(vantages, label)
+		vantages = append(vantages, report.VantageInfo{Label: label, Endpoint: endpoint, Proxy: st.Proxy})
+	}
+	for label := range proxyByLabel {
+		fatal("-proxy %q does not match any -endpoint label", label)
 	}
 
-	rep := report.New(urls, vantages, *bucket, *seed)
+	rep := report.New(vantages, *regionHeader, *bucket, *seed)
 	runPrefix := fmt.Sprintf("s3-wal-conformance/%d/", *seed)
 	rng := mrand.New(mrand.NewSource(*seed))
 
@@ -146,6 +162,10 @@ func main() {
 	}
 
 	rep.Latency = rec.Summary()
+	for i, st := range stores {
+		rep.Vantages[i].RegionsObserved = st.RegionsObserved()
+	}
+	rep.FinalizeScope()
 	fmt.Println(rep.Human())
 	if *jsonOut != "" {
 		data, err := rep.JSON()

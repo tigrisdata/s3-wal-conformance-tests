@@ -14,11 +14,49 @@ import (
 const SuiteVersion = "0.1.0-dev"
 
 // Evidence scope: the contract's clauses are global claims, so a run from a
-// single vantage point cannot support a cross-region conformance verdict.
+// single vantage point cannot support a cross-region conformance verdict —
+// and a second endpoint URL is not a second vantage unless it demonstrably
+// routed elsewhere (anycast fronts collapse hostnames onto one region).
 const (
-	ScopeRegional = "REGIONAL EVIDENCE ONLY"
-	ScopeMulti    = "MULTI-VANTAGE"
+	ScopeRegional       = "REGIONAL EVIDENCE ONLY"
+	ScopeMultiVerified  = "MULTI-VANTAGE (verified)"
+	ScopeMultiUnproven  = "MULTI-VANTAGE (unverified: no serving-region evidence)"
+	ScopeMultiCollapsed = "REGIONAL EVIDENCE ONLY (multiple endpoints, but every vantage was served from one region)"
 )
+
+// VantageInfo records one vantage and the serving-region evidence behind it.
+type VantageInfo struct {
+	Label           string           `json:"label"`
+	Endpoint        string           `json:"endpoint"`
+	Proxy           string           `json:"proxy,omitempty"`
+	RegionsObserved map[string]int64 `json:"regions_observed,omitempty"`
+}
+
+// ComputeScope derives the evidence stamp from what was actually observed.
+// captureEnabled says whether a serving-region header was being recorded.
+func ComputeScope(vantages []VantageInfo, captureEnabled bool) string {
+	if len(vantages) < 2 {
+		return ScopeRegional
+	}
+	if !captureEnabled {
+		return ScopeMultiUnproven
+	}
+	distinct := map[string]bool{}
+	for _, v := range vantages {
+		for r := range v.RegionsObserved {
+			distinct[r] = true
+		}
+	}
+	switch {
+	case len(distinct) >= 2:
+		return ScopeMultiVerified
+	case len(distinct) == 1:
+		return ScopeMultiCollapsed
+	default:
+		// Capture was on but the provider never sent the header.
+		return ScopeMultiUnproven
+	}
+}
 
 type CheckStatus string
 
@@ -58,31 +96,33 @@ func (g *GroupResult) Finalize() {
 }
 
 type Report struct {
-	SuiteVersion  string                           `json:"suite_version"`
-	StartedAt     time.Time                        `json:"started_at"`
-	Endpoints     []string                         `json:"endpoints"`
-	Vantages      []string                         `json:"vantages"`
-	EvidenceScope string                           `json:"evidence_scope"`
-	Bucket        string                           `json:"bucket"`
-	Seed          int64                            `json:"seed"`
-	Groups        []GroupResult                    `json:"groups"`
-	Latency       map[string]store.LatencySummary  `json:"latency_us"`
+	SuiteVersion  string                          `json:"suite_version"`
+	StartedAt     time.Time                       `json:"started_at"`
+	Vantages      []VantageInfo                   `json:"vantages"`
+	EvidenceScope string                          `json:"evidence_scope"`
+	RegionHeader  string                          `json:"region_header,omitempty"`
+	Bucket        string                          `json:"bucket"`
+	Seed          int64                           `json:"seed"`
+	Groups        []GroupResult                   `json:"groups"`
+	Latency       map[string]store.LatencySummary `json:"latency_us"`
 }
 
-func New(endpoints, vantages []string, bucket string, seed int64) *Report {
-	scope := ScopeRegional
-	if len(vantages) > 1 {
-		scope = ScopeMulti
-	}
+func New(vantages []VantageInfo, regionHeader, bucket string, seed int64) *Report {
 	return &Report{
 		SuiteVersion:  SuiteVersion,
 		StartedAt:     time.Now().UTC(),
-		Endpoints:     endpoints,
 		Vantages:      vantages,
-		EvidenceScope: scope,
+		RegionHeader:  regionHeader,
+		EvidenceScope: ScopeRegional, // finalized after the run via FinalizeScope
 		Bucket:        bucket,
 		Seed:          seed,
 	}
+}
+
+// FinalizeScope recomputes the evidence stamp from post-run vantage
+// observations (call after updating Vantages[i].RegionsObserved).
+func (r *Report) FinalizeScope() {
+	r.EvidenceScope = ComputeScope(r.Vantages, r.RegionHeader != "")
 }
 
 func (r *Report) AllPassed() bool {
@@ -101,8 +141,21 @@ func (r *Report) JSON() ([]byte, error) {
 // Human renders the terminal summary.
 func (r *Report) Human() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "s3-wal-conformance %s  bucket=%s  seed=%d  scope=%s\n",
+	fmt.Fprintf(&b, "s3-wal-conformance %s  bucket=%s  seed=%d\nscope: %s\n",
 		r.SuiteVersion, r.Bucket, r.Seed, r.EvidenceScope)
+	for _, v := range r.Vantages {
+		fmt.Fprintf(&b, "vantage %-10s %s", v.Label, v.Endpoint)
+		if v.Proxy != "" {
+			fmt.Fprintf(&b, " via %s", v.Proxy)
+		}
+		if len(v.RegionsObserved) > 0 {
+			fmt.Fprintf(&b, "  served-from:")
+			for region, n := range v.RegionsObserved {
+				fmt.Fprintf(&b, " %s×%d", region, n)
+			}
+		}
+		b.WriteString("\n")
+	}
 	for _, g := range r.Groups {
 		verdict := "PASS"
 		if !g.Passed {

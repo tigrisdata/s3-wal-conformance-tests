@@ -97,12 +97,13 @@ var registerModel = porcupine.Model{
 }
 
 type recorded struct {
-	key      string
-	client   int
-	in       input
-	out      output
-	call     int64
-	ret      int64
+	key       string
+	client    int
+	region    string // serving region, when the store captures one
+	in        input
+	out       output
+	call      int64
+	ret       int64
 	unbounded bool // ambiguous write: return time becomes end-of-history
 }
 
@@ -145,10 +146,11 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 			st := cfg.store(c)
 			for n := 0; n < cfg.OpsPerClient; n++ {
 				key := keys[rng.Intn(len(keys))]
+				opCtx, capture := store.ContextWithRegionCapture(ctx)
 				r := recorded{key: key, client: c, call: clock()}
 				switch p := rng.Intn(100); {
 				case p < 40: // GET
-					body, _, out := st.Get(ctx, key)
+					body, _, out := st.Get(opCtx, key)
 					r.ret = clock()
 					r.in = input{Kind: opGet}
 					switch out {
@@ -161,7 +163,7 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 					}
 				case p < 80: // PUT
 					v := fmt.Sprintf("c%d-%d", c, n)
-					_, out := st.Put(ctx, key, []byte(v))
+					_, out := st.Put(opCtx, key, []byte(v))
 					r.ret = clock()
 					r.in = input{Kind: opPut, Value: v}
 					switch out {
@@ -172,7 +174,7 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 						continue // definite failure: not applied
 					}
 				default: // DELETE
-					out := st.Delete(ctx, key)
+					out := st.Delete(opCtx, key)
 					r.ret = clock()
 					r.in = input{Kind: opDelete}
 					switch out {
@@ -183,6 +185,7 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 						continue
 					}
 				}
+				r.region = capture.Value()
 				record(r)
 			}
 		}(c)
@@ -197,33 +200,36 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 			maxRet = r.ret
 		}
 	}
-	perKey := map[string][]porcupine.Operation{}
+	perKey := map[string][]recorded{}
 	ambiguous := 0
-	for _, r := range history {
-		ret := r.ret
-		if r.unbounded {
-			ret = maxRet + 1
+	for i := range history {
+		if history[i].unbounded {
+			history[i].ret = maxRet + 1
 			ambiguous++
 		}
-		perKey[r.key] = append(perKey[r.key], porcupine.Operation{
-			ClientId: r.client,
-			Input:    r.in,
-			Output:   r.out,
-			Call:     r.call,
-			Return:   ret,
-		})
+		perKey[history[i].key] = append(perKey[history[i].key], history[i])
 	}
 
 	total := 0
-	for key, ops := range perKey {
-		total += len(ops)
+	for key, recs := range perKey {
+		total += len(recs)
+		ops := make([]porcupine.Operation, len(recs))
+		for i, r := range recs {
+			ops[i] = porcupine.Operation{
+				ClientId: r.client,
+				Input:    r.in,
+				Output:   r.out,
+				Call:     r.call,
+				Return:   r.ret,
+			}
+		}
 		res, info := porcupine.CheckOperationsVerbose(registerModel, ops, 30*time.Second)
 		switch res {
 		case porcupine.Ok:
 		case porcupine.Unknown:
 			return fail(name, "key %s: checker inconclusive after 30s on %d ops — not a violation; rerun with a smaller workload before drawing conclusions", key, len(ops))
 		default:
-			artifacts := dumpFailure(cfg, key, ops, info)
+			artifacts := dumpFailure(cfg, key, recs, info)
 			return fail(name, "key %s: history of %d ops is NOT linearizable — no total order consistent with real-time precedence explains the observed reads (%s; reproduce with this run's seed)", key, len(ops), artifacts)
 		}
 	}
@@ -231,9 +237,10 @@ func linearizableRegisters(ctx context.Context, cfg *Config) report.CheckResult 
 		total, cfg.Clients, cfg.HotKeys, ambiguous)
 }
 
-// dumpFailure writes the failing history as JSON and as porcupine's
-// interactive HTML visualization; returns a description of what was written.
-func dumpFailure(cfg *Config, key string, ops []porcupine.Operation, info porcupine.LinearizationInfo) string {
+// dumpFailure writes the failing history as JSON (each op annotated with the
+// serving region when captured) and as porcupine's interactive HTML
+// visualization; returns a description of what was written.
+func dumpFailure(cfg *Config, key string, recs []recorded, info porcupine.LinearizationInfo) string {
 	if err := os.MkdirAll(cfg.ArtifactsDir, 0o755); err != nil {
 		return fmt.Sprintf("could not write artifacts: %v", err)
 	}
@@ -245,18 +252,17 @@ func dumpFailure(cfg *Config, key string, ops []porcupine.Operation, info porcup
 		Value   string `json:"value,omitempty"`
 		Present *bool  `json:"present,omitempty"`
 		Read    string `json:"read,omitempty"`
+		Region  string `json:"served_from,omitempty"`
 		CallNs  int64  `json:"call_ns"`
 		RetNs   int64  `json:"return_ns"`
 	}
 	kinds := map[opKind]string{opGet: "get", opPut: "put", opDelete: "delete"}
-	dump := make([]jsonOp, 0, len(ops))
-	for _, op := range ops {
-		in := op.Input.(input)
-		j := jsonOp{Client: op.ClientId, Kind: kinds[in.Kind], Value: in.Value, CallNs: op.Call, RetNs: op.Return}
-		if in.Kind == opGet {
-			o := op.Output.(output)
-			j.Present = &o.Present
-			j.Read = o.Value
+	dump := make([]jsonOp, 0, len(recs))
+	for _, r := range recs {
+		j := jsonOp{Client: r.client, Kind: kinds[r.in.Kind], Value: r.in.Value, Region: r.region, CallNs: r.call, RetNs: r.ret}
+		if r.in.Kind == opGet {
+			j.Present = &r.out.Present
+			j.Read = r.out.Value
 		}
 		dump = append(dump, j)
 	}
