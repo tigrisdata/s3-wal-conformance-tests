@@ -77,8 +77,24 @@ the given bucket. Every run prints its seed and is reproducible from it. Add
 
 The contract's clauses are global claims, so a run from one vantage is stamped
 `REGIONAL EVIDENCE ONLY`. To gather cross-region evidence, give the suite several
-vantages and route each through a host in a different region — an `ssh -N -D`
-SOCKS tunnel is the simplest way — so the connections genuinely originate there:
+vantages that genuinely enter the store in different regions. Clients in every
+test group are spread across the vantages, so contended CAS races, listing churn,
+and the C2/C5 reader pools all cross regions.
+
+If the provider exposes **regional endpoints**, that is the simplest way. Tigris
+does (`iad1`, `ord1`, `sjc1`, `fra`, … `.storage.dev`); they require path-style
+addressing:
+
+```
+./conformance -path-style -bucket <test-bucket> \
+  -endpoint iad1=https://iad1.storage.dev \
+  -endpoint ord1=https://ord1.storage.dev \
+  -endpoint sjc1=https://sjc1.storage.dev \
+  -endpoint fra=https://fra.storage.dev
+```
+
+Otherwise, route each vantage through a host in the target region — an
+`ssh -N -D` SOCKS tunnel is the simplest way — so the connections originate there:
 
 ```
 ssh -N -D 1081 user@host-in-iad &
@@ -89,9 +105,6 @@ ssh -N -D 1082 user@host-in-fra &
   -endpoint iad=https://<s3-endpoint>   -proxy iad=socks5://localhost:1081 \
   -endpoint fra=https://<s3-endpoint>   -proxy fra=socks5://localhost:1082
 ```
-
-Clients in every test group are spread across the vantages, so contended CAS
-races, listing churn, and the C2/C5 reader pools all cross regions.
 
 A second endpoint URL is not a second vantage unless it demonstrably routed
 elsewhere — many providers front every hostname with one anycast address. So the
